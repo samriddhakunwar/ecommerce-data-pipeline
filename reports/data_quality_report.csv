@@ -1,0 +1,14 @@
+check,column,status,details,count
+Missing Values,product_id,PASS,No missing values,0
+Missing Values,product_name,PASS,No missing values,0
+Missing Values,category,PASS,No missing values,0
+Missing Values,price,PASS,No missing values,0
+Missing Values,stock,PASS,No missing values,0
+Missing Values,supplier,PASS,No missing values,0
+Missing Values,last_updated,PASS,No missing values,0
+Duplicate Product IDs,product_id,PASS,No duplicates,0
+Price Validity,price,PASS,All prices valid,0
+Stock Validity,stock,PASS,All stock valid,0
+Category Validity,category,PASS,All categories valid,0
+Product Name Validity,product_name,PASS,All product names valid,0
+Date Format,last_updated,PASS,All dates valid,0
