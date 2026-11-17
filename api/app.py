@@ -174,7 +174,7 @@ def get_statistics() -> dict:
     return stats
 
 
-@app.get("/health")
+@app.get("/health", response_model=None)
 def health_check() -> dict | JSONResponse:
     """200 only if the products table exists and has rows; otherwise 503."""
     try:
