@@ -1,190 +1,221 @@
 """
 Automation Pipeline Orchestrator
-Orchestrates the entire data pipeline process
-Run: python automate_pipeline.py
+
+clean -> validate (quality gate) -> upsert to DB -> report
+Run from anywhere: python scripts/automate_pipeline.py
 """
+from __future__ import annotations
+
+import argparse
+import json
+import logging
 import sys
 import time
-import logging
 from pathlib import Path
 
-# Add scripts to path
-sys.path.insert(0, str(Path(__file__).parent / 'scripts'))
+import pandas as pd
+from sqlalchemy.engine import make_url
 
 from clean_data import DataCleaner
-from validate_data import DataValidator
+from config import DATA_DIR, RAW_DATA, REPORTS_DIR, get_db_url, setup_logging
 from upload_to_db import DatabaseUploader
+from validate_data import DEFAULT_MAX_PRICE, DEFAULT_MAX_REJECTION_PCT, DataValidator
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
+class ValidationGateError(RuntimeError):
+    """Raised when validation fails and failures are not allowed."""
+
+
 class DataPipeline:
-    """Orchestrate entire data pipeline"""
+    """Orchestrate the entire data pipeline."""
 
-    def __init__(self, raw_data='data/raw_products.csv', db_type='sqlite'):
-        """Initialize pipeline"""
-        self.raw_data = raw_data
-        self.cleaned_data = 'data/cleaned_products.csv'
-        self.validation_report = 'reports/data_quality_report.csv'
-        self.db_type = db_type
-        self.start_time = None
-        self.end_time = None
+    def __init__(
+        self,
+        raw_data: str | Path = RAW_DATA,
+        db_url: str | None = None,
+        allow_validation_failures: bool = False,
+        max_rejection_pct: float = DEFAULT_MAX_REJECTION_PCT,
+        max_price: float = DEFAULT_MAX_PRICE,
+        data_dir: Path = DATA_DIR,
+        reports_dir: Path = REPORTS_DIR,
+    ) -> None:
+        self.raw_data = Path(raw_data)
+        self.db_url = get_db_url(db_url)
+        self.allow_validation_failures = allow_validation_failures
+        self.max_rejection_pct = max_rejection_pct
+        self.max_price = max_price
+        self.cleaned_data = Path(data_dir) / "cleaned_products.csv"
+        self.rejected_data = Path(data_dir) / "rejected_products.csv"
+        self.validation_report = Path(reports_dir) / "data_quality_report.csv"
+        self.execution_report = Path(reports_dir) / "pipeline_execution_report.txt"
+        self.status = "NOT RUN"
+        self.error: str | None = None
+        self.cleaning_report: dict[str, int] = {}
+        self.validation_summary: dict[str, int] = {}
+        self.failed_checks: list[str] = []
+        self.rows_upserted = 0
+        self.table_row_count: int | None = None
+        self.start_time = 0.0
+        self.end_time = 0.0
 
-    def run_pipeline(self):
-        """Execute full pipeline"""
+    def run_pipeline(self) -> bool:
+        """Execute the full pipeline. Returns True on success."""
+        self.start_time = time.time()
+        print("\n" + "=" * 70 + "\nE-COMMERCE DATA PIPELINE AUTOMATION\n" + "=" * 70)
         try:
-            self.start_time = time.time()
-
-            print("\n" + "="*70)
-            print("E-COMMERCE DATA PIPELINE AUTOMATION")
-            print("="*70)
-
-            # Step 1: Data Cleaning
             print("\n[STEP 1/4] CLEANING DATA...")
-            self._step_cleaning()
-            print("[OK] Data cleaning complete")
-
-            # Step 2: Data Validation
+            cleaned = self._step_cleaning()
             print("\n[STEP 2/4] VALIDATING DATA...")
-            self._step_validation()
-            print("[OK] Data validation complete")
-
-            # Step 3: Database Upload
+            self._step_validation(cleaned)
             print("\n[STEP 3/4] UPLOADING TO DATABASE...")
             self._step_database_upload()
-            print("[OK] Database upload complete")
-
-            # Record end time before report generation (report uses this)
+            self.status = "SUCCESS"
+        except Exception as e:  # noqa: BLE001 - top-level: record and report any failure
+            self.status = "FAILED"
+            self.error = str(e)
+            logger.error("Pipeline execution failed: %s", e)
+        finally:
             self.end_time = time.time()
-
-            # Step 4: Generate Report
             print("\n[STEP 4/4] GENERATING REPORT...")
             self._step_generate_report()
-            print("[OK] Report generated")
+        self._print_summary()
+        return self.status == "SUCCESS"
 
-            self._print_summary()
+    def _step_cleaning(self) -> pd.DataFrame:
+        cleaner = DataCleaner(self.raw_data)
+        df = cleaner.run_all_cleaning()
+        cleaner.save_cleaned_data(self.cleaned_data)
+        cleaner.save_rejected_data(self.rejected_data)
+        self.cleaning_report = cleaner.get_report()
+        return df
 
-            return True
+    def _step_validation(self, cleaned: pd.DataFrame) -> None:
+        validator = DataValidator(
+            df=cleaned,
+            raw_row_count=self.cleaning_report.get("raw_rows"),
+            max_price=self.max_price,
+            max_rejection_pct=self.max_rejection_pct,
+        )
+        validator.run_all_validations()
+        validator.save_report(self.validation_report)
+        self.validation_summary = validator.summary()
+        self.failed_checks = validator.failed_checks
+        if validator.has_failures:
+            msg = f"Validation failed: {', '.join(self.failed_checks)}"
+            if not self.allow_validation_failures:
+                raise ValidationGateError(msg + " (use --allow-validation-failures to override)")
+            logger.warning("%s; continuing because --allow-validation-failures is set", msg)
 
-        except Exception as e:
-            if self.end_time is None:
-                self.end_time = time.time()
-            logger.error(f"Pipeline execution failed: {e}")
-            print(f"\n[ERROR] Pipeline failed: {e}")
-            return False
-
-    def _step_cleaning(self):
-        """Execute data cleaning step"""
+    def _step_database_upload(self) -> None:
+        uploader = DatabaseUploader(db_url=self.db_url)
+        uploader.connect()
         try:
-            cleaner = DataCleaner(self.raw_data)
-            cleaner.run_all_cleaning()
-            cleaner.save_cleaned_data(self.cleaned_data)
-            logger.info("Data cleaning step completed successfully")
-        except Exception as e:
-            logger.error(f"Cleaning step failed: {e}")
-            raise
-
-    def _step_validation(self):
-        """Execute data validation step"""
-        try:
-            validator = DataValidator(self.cleaned_data)
-            validator.run_all_validations()
-            validator.save_report(self.validation_report)
-            logger.info("Data validation step completed successfully")
-        except Exception as e:
-            logger.error(f"Validation step failed: {e}")
-            raise
-
-    def _step_database_upload(self):
-        """Execute database upload step"""
-        try:
-            uploader = DatabaseUploader(db_type=self.db_type)
-            uploader.connect()
             uploader.create_schema()
-            uploader.upload_data(self.cleaned_data, if_exists='replace')
-            uploader.verify_upload()
+            # Upload exactly what was written to disk, so the CSV and the DB agree.
+            df = pd.read_csv(self.cleaned_data, dtype={"product_id": str})
+            self.rows_upserted = uploader.upsert_dataframe(df)
+            self.table_row_count = uploader.verify_upload(df)
             uploader.get_statistics()
+        finally:
             uploader.close()
-            logger.info("Database upload step completed successfully")
-        except Exception as e:
-            logger.error(f"Database upload step failed: {e}")
-            raise
 
-    def _step_generate_report(self):
-        """Generate execution report"""
-        try:
-            report_content = f"""
-DATA PIPELINE EXECUTION REPORT
-{'='*70}
+    def report_data(self) -> dict:
+        return {
+            "status": self.status,
+            "error": self.error,
+            "started_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.start_time)),
+            "duration_seconds": round(self.end_time - self.start_time, 2),
+            "files": {
+                "raw_data": str(self.raw_data),
+                "cleaned_data": str(self.cleaned_data),
+                "rejected_data": str(self.rejected_data),
+                "validation_report": str(self.validation_report),
+            },
+            "database": make_url(self.db_url).render_as_string(hide_password=True),
+            "cleaning": self.cleaning_report,
+            "validation": {**self.validation_summary, "failed_checks": self.failed_checks},
+            "rows_upserted": self.rows_upserted,
+            "table_row_count": self.table_row_count,
+        }
 
-Execution Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.start_time))}
-Pipeline Duration: {self.end_time - self.start_time:.2f} seconds
+    def _step_generate_report(self) -> None:
+        data = self.report_data()
+        lines = [
+            "DATA PIPELINE EXECUTION REPORT",
+            "=" * 70,
+            f"STATUS: {data['status']}",
+        ]
+        if data["error"]:
+            lines.append(f"ERROR: {data['error']}")
+        lines += [
+            f"Execution Time: {data['started_at']}",
+            f"Pipeline Duration: {data['duration_seconds']:.2f} seconds",
+            "",
+            "FILES:",
+            *[f"- {k}: {v}" for k, v in data["files"].items()],
+            "",
+            "CLEANING (per-step counts):",
+            *[f"- {k}: {v}" for k, v in data["cleaning"].items()],
+            "",
+            "VALIDATION:",
+            f"- total checks: {self.validation_summary.get('total', 0)}",
+            f"- passed: {self.validation_summary.get('passed', 0)}",
+            f"- failed: {self.validation_summary.get('failed', 0)}",
+            *[f"  FAIL: {c}" for c in self.failed_checks],
+            "",
+            "DATABASE:",
+            f"- url: {data['database']}",
+            f"- rows upserted: {data['rows_upserted']}",
+            f"- table row count: {data['table_row_count']}",
+            "",
+        ]
+        self.execution_report.parent.mkdir(parents=True, exist_ok=True)
+        self.execution_report.write_text("\n".join(lines), encoding="utf-8")
+        self.execution_report.with_suffix(".json").write_text(
+            json.dumps(data, indent=2), encoding="utf-8"
+        )
+        logger.info("Execution report written to %s (+ .json)", self.execution_report)
 
-FILES PROCESSED:
-- Raw Data: {self.raw_data}
-- Cleaned Data: {self.cleaned_data}
-- Validation Report: {self.validation_report}
-
-DATABASE:
-- Type: {self.db_type}
-- Table: products
-
-STATUS: SUCCESS
-
-NEXT STEPS:
-1. Review data quality report in {self.validation_report}
-2. Query products from database using SQL or API
-3. Monitor data pipeline regularly
-"""
-            with open('reports/pipeline_execution_report.txt', 'w') as f:
-                f.write(report_content)
-
-            logger.info("Execution report generated")
-
-        except Exception as e:
-            logger.error(f"Report generation failed: {e}")
-            raise
-
-    def _print_summary(self):
-        """Print pipeline summary"""
-        duration = self.end_time - self.start_time
-        print("\n" + "="*70)
-        print("PIPELINE EXECUTION SUMMARY")
-        print("="*70)
-        print(f"Status: SUCCESS")
-        print(f"Duration: {duration:.2f} seconds")
-        print(f"Start Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.start_time))}")
-        print(f"End Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.end_time))}")
-        print(f"\nOutput Files Generated:")
-        print(f"  - {self.cleaned_data}")
-        print(f"  - {self.validation_report}")
-        print(f"  - reports/pipeline_execution_report.txt")
-        print(f"  - ecommerce.db (SQLite database)")
-        print("="*70 + "\n")
+    def _print_summary(self) -> None:
+        print("\n" + "=" * 70 + "\nPIPELINE EXECUTION SUMMARY\n" + "=" * 70)
+        print(f"Status: {self.status}")
+        if self.error:
+            print(f"Error: {self.error}")
+        print(f"Duration: {self.end_time - self.start_time:.2f} seconds")
+        print(f"Raw rows: {self.cleaning_report.get('raw_rows', 0)}, "
+              f"clean: {self.cleaning_report.get('clean_rows', 0)}, "
+              f"rejected: {self.cleaning_report.get('rejected_rows', 0)}")
+        print(f"Validation: {self.validation_summary.get('passed', 0)} passed, "
+              f"{self.validation_summary.get('failed', 0)} failed")
+        print(f"Rows upserted: {self.rows_upserted}; table row count: {self.table_row_count}")
+        print(f"Report: {self.execution_report} (+ .json)")
+        print("=" * 70 + "\n")
 
 
-def main():
-    """Main execution"""
-    import argparse
-
-    parser = argparse.ArgumentParser(description='E-commerce Data Pipeline Automation')
-    parser.add_argument('--db-type', default='sqlite', choices=['sqlite', 'mysql', 'postgresql'],
-                       help='Database type (default: sqlite)')
-    parser.add_argument('--raw-data', default='data/raw_products.csv',
-                       help='Path to raw data CSV file')
-
+def main() -> None:
+    parser = argparse.ArgumentParser(description="E-commerce Data Pipeline Automation")
+    parser.add_argument("--raw-data", default=str(RAW_DATA), help="Path to raw data CSV")
+    parser.add_argument("--db-url", help="SQLAlchemy URL (default: $DATABASE_URL or local SQLite)")
+    parser.add_argument("--allow-validation-failures", action="store_true",
+                        help="Upload even if validation checks fail")
+    parser.add_argument("--max-rejection-pct", type=float, default=DEFAULT_MAX_REJECTION_PCT,
+                        help="Fail validation if more than this %% of raw rows are rejected")
+    parser.add_argument("--max-price", type=float, default=DEFAULT_MAX_PRICE,
+                        help="Fail validation if any price exceeds this")
     args = parser.parse_args()
 
-    pipeline = DataPipeline(raw_data=args.raw_data, db_type=args.db_type)
-    success = pipeline.run_pipeline()
+    setup_logging()
+    pipeline = DataPipeline(
+        raw_data=args.raw_data,
+        db_url=args.db_url,
+        allow_validation_failures=args.allow_validation_failures,
+        max_rejection_pct=args.max_rejection_pct,
+        max_price=args.max_price,
+    )
+    sys.exit(0 if pipeline.run_pipeline() else 1)
 
-    sys.exit(0 if success else 1)
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
