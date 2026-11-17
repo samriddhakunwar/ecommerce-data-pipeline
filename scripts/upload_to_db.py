@@ -135,13 +135,17 @@ def dataframe_to_records(df: pd.DataFrame) -> list[dict]:
 class DatabaseUploader:
     """Handle database operations for product data."""
 
-    def __init__(self, db_url: str | None = None) -> None:
-        self.db_url = get_db_url(db_url)
-        self.engine: Engine | None = None
+    def __init__(self, db_url: str | None = None, engine: Engine | None = None) -> None:
+        """Pass a db_url (default: config.get_db_url()) or an existing engine."""
+        self.engine: Engine | None = engine
+        if engine is not None:
+            self.db_url = engine.url.render_as_string(hide_password=False)
+        else:
+            self.db_url = get_db_url(db_url)
 
     @property
     def dialect(self) -> str:
-        return make_url(self.db_url).get_backend_name()
+        return self.engine.dialect.name if self.engine else make_url(self.db_url).get_backend_name()
 
     def connect(self) -> Engine:
         """Create the SQLAlchemy engine."""
