@@ -9,17 +9,24 @@ Run:  streamlit run streamlit_app.py
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, func, inspect, select
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT))
 
-from config import EXECUTION_REPORT, REJECTED_DATA, get_db_url  # noqa: E402
+import config  # noqa: E402
+from config import get_db_url  # noqa: E402
 from upload_to_db import products  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 SERIES_COLOR = "#2a78d6"  # single-series charts: one hue, no legend needed
 LOW_STOCK = 10
@@ -52,18 +59,65 @@ def load_rejected(path: str) -> pd.DataFrame | None:
     return pd.read_csv(p, dtype=str) if p.exists() else None
 
 
+def has_products(db_url: str) -> bool:
+    engine = create_engine(db_url)
+    try:
+        if "products" not in inspect(engine).get_table_names():
+            return False
+        with engine.connect() as conn:
+            return bool(conn.execute(select(func.count()).select_from(products)).scalar())
+    finally:
+        engine.dispose()
+
+
+@st.cache_resource(show_spinner=False)
+def ensure_data(db_url: str) -> str | None:
+    """Build the dataset on a cold start (e.g. Streamlit Community Cloud, where the
+    gitignored ecommerce.db doesn't exist). Runs at most once per server process.
+    Returns an error message, or None on success."""
+    if has_products(db_url):
+        return None
+    if os.environ.get("DASHBOARD_AUTOBUILD", "1") == "0":
+        return "autobuild disabled"
+    import generate_raw_data
+    from automate_pipeline import DataPipeline
+
+    try:
+        generate_raw_data.main(output=config.RAW_DATA)
+        pipeline = DataPipeline(
+            raw_data=config.RAW_DATA,
+            db_url=db_url,
+            data_dir=config.DATA_DIR,
+            reports_dir=config.REPORTS_DIR,
+        )
+        if not pipeline.run_pipeline():
+            return pipeline.error or "pipeline failed"
+    except Exception as exc:  # keep the UI up; details go to the log
+        logger.exception("Dashboard data build failed")
+        return str(exc)
+    return None
+
+
 st.title("E-commerce Data Pipeline")
 
-df = load_products(get_db_url())
+DB_URL = get_db_url()
+with st.spinner("Building the dataset (first start only)…"):
+    build_error = ensure_data(DB_URL)
+df = load_products(DB_URL)
+if df is None or df.empty:
+    load_products.clear()  # don't cache "no data" for the next visitor
+    df = load_products(DB_URL)
 if df is None or df.empty:
     st.warning(
         "No product data yet. Run `python generate_raw_data.py` and "
         "`python scripts/automate_pipeline.py`, then refresh."
     )
+    if build_error and build_error != "autobuild disabled":
+        st.caption("Automatic build failed; see the app logs for details.")
     st.stop()
 
 # --- last pipeline run -----------------------------------------------------------------
-report = load_run_report(str(EXECUTION_REPORT.with_suffix(".json")))
+report = load_run_report(str(config.EXECUTION_REPORT.with_suffix(".json")))
 if report:
     ok = report["status"] == "SUCCESS"
     v = report.get("validation", {})
@@ -116,7 +170,7 @@ with c2:
     st.bar_chart(by_cat["avg_price"].round(2).sort_values(ascending=False), horizontal=True,
                  color=SERIES_COLOR, x_label="Avg price ($)", y_label="")
 
-rejected = load_rejected(str(REJECTED_DATA))
+rejected = load_rejected(str(config.REJECTED_DATA))
 c3, c4 = st.columns(2)
 with c3:
     st.subheader("Rejected rows by reason (last run)")

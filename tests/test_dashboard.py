@@ -19,8 +19,29 @@ def run(monkeypatch, db_url):
 
 
 def test_dashboard_without_data_shows_hint(monkeypatch, db_url):
+    monkeypatch.setenv("DASHBOARD_AUTOBUILD", "0")
     at = run(monkeypatch, db_url)
     assert "No product data yet" in at.warning[0].value
+
+
+def test_dashboard_cold_start_builds_data(monkeypatch, db_url, tmp_path):
+    """Simulates Streamlit Community Cloud: no DB, no data files -> the app builds them."""
+    import config
+
+    data_dir, reports_dir = tmp_path / "data", tmp_path / "reports"
+    data_dir.mkdir()
+    reports_dir.mkdir()
+    monkeypatch.setattr(config, "DATA_DIR", data_dir)
+    monkeypatch.setattr(config, "REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(config, "RAW_DATA", data_dir / "raw_products.csv")
+    monkeypatch.setattr(config, "REJECTED_DATA", data_dir / "rejected_products.csv")
+    monkeypatch.setattr(config, "EXECUTION_REPORT", reports_dir / "pipeline_execution_report.txt")
+    monkeypatch.setenv("DASHBOARD_AUTOBUILD", "1")
+
+    at = run(monkeypatch, db_url)
+    assert not at.warning
+    assert int({m.label: m.value for m in at.metric}["Products"].replace(",", "")) > 1000
+    assert (data_dir / "raw_products.csv").exists()
 
 
 def test_dashboard_with_data(monkeypatch, db_url, engine):
