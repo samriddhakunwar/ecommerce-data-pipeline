@@ -1,6 +1,11 @@
-pandas>=1.3.0
-numpy>=1.21.0
-sqlalchemy>=1.4.0
-fastapi>=0.95.0
-uvicorn>=0.21.0
-python-multipart>=0.0.5
+pandas>=2.0,<3
+numpy>=1.24,<3
+sqlalchemy>=2.0,<3
+fastapi>=0.115,<1
+pydantic>=2.5,<3
+uvicorn>=0.27,<1
+python-multipart>=0.0.9   # required by FastAPI for the UploadFile endpoint
+
+# Optional database drivers (install only the one you need):
+#   PostgreSQL: pip install "psycopg2-binary>=2.9,<3"
+#   MySQL:      pip install "pymysql>=1.1,<2"
