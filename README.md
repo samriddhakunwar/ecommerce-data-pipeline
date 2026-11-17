@@ -39,6 +39,7 @@ ecommerce-data-pipeline/
 │   ├── upload_to_db.py         # canonical schema + upsert (DatabaseUploader)
 │   └── automate_pipeline.py    # orchestrator: clean -> validate -> upsert -> report
 ├── api/app.py                  # FastAPI app
+├── streamlit_app.py            # Streamlit dashboard
 ├── database/schema.sql         # reference copy of the schema (code is canonical)
 ├── tests/                      # pytest suite (temp dirs + temp SQLite only)
 ├── data/  reports/             # generated outputs (git-ignored)
@@ -155,6 +156,25 @@ curl -X POST -H "X-API-Key: change-me" -F "file=@data/raw_products.csv" http://l
 Allowed origins come from `CORS_ORIGINS` (comma-separated). The default is
 localhost dev origins (ports 3000, 5173, 8000). If you set it to `*`,
 credentials are disabled.
+
+## Dashboard
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Opens at `http://localhost:8501`. It reads the same database as the pipeline
+(`DATABASE_URL`, or the project-root `ecommerce.db`) and the latest reports,
+and shows:
+
+- the last run's status, validation totals and rows upserted
+- KPI tiles: products, categories, average price, total stock, low-stock count
+- products and average price per category
+- rejected rows by reason
+- a low-stock table and a filterable product table with CSV download
+
+Category and price filters apply to everything on the page. Data is cached
+for 60 seconds; re-run the pipeline and refresh to see new data.
 
 ## Tests and linting
 

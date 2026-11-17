@@ -11,4 +11,4 @@ pythonpath = [".", "scripts", "api"]
 testpaths = ["tests"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["clean_data", "config", "upload_to_db", "validate_data", "automate_pipeline", "app", "generate_raw_data"]
+known-first-party = ["clean_data", "config", "upload_to_db", "validate_data", "automate_pipeline", "app", "generate_raw_data", "streamlit_app"]
