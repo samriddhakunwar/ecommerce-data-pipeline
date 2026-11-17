@@ -105,18 +105,16 @@ class DataCleaner:
     def clean_prices(self) -> None:
         """Convert prices to numeric, reject missing/non-numeric/non-positive, round to 2dp."""
         price = pd.to_numeric(self.df["price"], errors="coerce")
-        self.df["price"] = price
         n = self._reject(price.isna() | (price <= 0), "invalid_price")
-        self.df["price"] = self.df["price"].round(2)
+        self.df["price"] = price[self.df.index].round(2)
         self.cleaning_report["invalid_prices_removed"] = n
         logger.info("Removed %d rows with invalid prices", n)
 
     def clean_stock(self) -> None:
         """Reject missing, negative or fractional stock; cast to int."""
         stock = pd.to_numeric(self.df["stock"], errors="coerce")
-        self.df["stock"] = stock
         n = self._reject(stock.isna() | (stock < 0) | (stock % 1 != 0), "invalid_stock")
-        self.df["stock"] = self.df["stock"].astype(int)
+        self.df["stock"] = stock[self.df.index].astype(int)
         self.cleaning_report["invalid_stock_removed"] = n
         logger.info("Removed %d rows with invalid stock", n)
 
@@ -126,8 +124,8 @@ class DataCleaner:
         parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
         for fmt in DATE_FORMATS:
             parsed = parsed.fillna(pd.to_datetime(raw, format=fmt, errors="coerce"))
-        self.df["last_updated"] = parsed
         n = self._reject(parsed.isna(), "invalid_date")
+        self.df["last_updated"] = parsed[self.df.index]
         self.cleaning_report["invalid_dates_removed"] = n
         logger.info("Removed %d rows with invalid dates", n)
 
