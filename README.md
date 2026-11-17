@@ -1,6 +1,9 @@
 # E-commerce Data Pipeline
 
 [![CI](https://github.com/samriddhakunwar/ecommerce-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/samriddhakunwar/ecommerce-data-pipeline/actions/workflows/ci.yml)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://ecommerce-data-pipeline.streamlit.app/)
+
+**Live dashboard:** https://ecommerce-data-pipeline.streamlit.app/
 
 A portfolio project: a small batch pipeline that cleans and validates a messy
 e-commerce product CSV, upserts it into a SQL database, and serves it through
@@ -158,6 +161,8 @@ localhost dev origins (ports 3000, 5173, 8000). If you set it to `*`,
 credentials are disabled.
 
 ## Dashboard
+
+Live at **https://ecommerce-data-pipeline.streamlit.app/**. To run it locally:
 
 ```bash
 streamlit run streamlit_app.py
