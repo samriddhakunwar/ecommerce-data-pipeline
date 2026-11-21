@@ -154,7 +154,8 @@ if view.empty:
 
 # --- KPI row ---------------------------------------------------------------------------
 low = view[view["stock"] < LOW_STOCK].sort_values("stock")
-k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1, k2, k3 = st.columns(3)  # two rows of 3: six across truncates values on laptops
+k4, k5, k6 = st.columns(3)
 k1.metric("Products", f"{len(view):,}", border=True)
 k2.metric("Categories", view["category"].nunique(), border=True)
 k3.metric("Avg price", f"${view['price'].mean():,.2f}", border=True)
