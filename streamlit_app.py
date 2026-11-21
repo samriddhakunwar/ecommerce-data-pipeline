@@ -153,12 +153,18 @@ if view.empty:
     st.stop()
 
 # --- KPI row ---------------------------------------------------------------------------
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Products", f"{len(view):,}")
-k2.metric("Categories", view["category"].nunique())
-k3.metric("Avg price", f"${view['price'].mean():,.2f}")
-k4.metric("Total stock", f"{int(view['stock'].sum()):,}")
-k5.metric(f"Low stock (<{LOW_STOCK})", int((view["stock"] < LOW_STOCK).sum()))
+low = view[view["stock"] < LOW_STOCK].sort_values("stock")
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1.metric("Products", f"{len(view):,}", border=True)
+k2.metric("Categories", view["category"].nunique(), border=True)
+k3.metric("Avg price", f"${view['price'].mean():,.2f}", border=True)
+k4.metric("Total stock", f"{int(view['stock'].sum()):,}", border=True)
+k5.metric("Inventory value", f"${(view['price'] * view['stock']).sum():,.0f}", border=True)
+k6.metric(f"Low stock (<{LOW_STOCK})", len(low), border=True)
+
+overview, inventory, quality, catalog = st.tabs(
+    ["📊 Overview", f"⚠️ Low stock ({len(low)})", "🧹 Data quality", "📋 Products"]
+)
 
 # --- charts: one measure per chart, sorted, single hue ---------------------------------
 by_cat = (
@@ -166,37 +172,42 @@ by_cat = (
     .agg(products=("product_id", "count"), avg_price=("price", "mean"))
     .sort_values("products", ascending=False)
 )
-c1, c2 = st.columns(2)
-with c1:
-    st.subheader("Products per category")
-    st.bar_chart(by_cat["products"], horizontal=True, color=SERIES_COLOR,
-                 x_label="Products", y_label="")
-with c2:
-    st.subheader("Average price per category ($)")
-    st.bar_chart(by_cat["avg_price"].round(2).sort_values(ascending=False), horizontal=True,
-                 color=SERIES_COLOR, x_label="Avg price ($)", y_label="")
+with overview:
+    c1, c2 = st.columns(2)
+    with c1.container(border=True):
+        st.subheader("Products per category")
+        st.bar_chart(by_cat["products"], horizontal=True, color=SERIES_COLOR,
+                     x_label="Products", y_label="")
+    with c2.container(border=True):
+        st.subheader("Average price per category ($)")
+        st.bar_chart(by_cat["avg_price"].round(2).sort_values(ascending=False),
+                     horizontal=True, color=SERIES_COLOR, x_label="Avg price ($)", y_label="")
 
-rejected = load_rejected(str(config.REJECTED_DATA))
-c3, c4 = st.columns(2)
-with c3:
-    st.subheader("Rejected rows by reason (last run)")
+with inventory:
+    if low.empty:
+        st.success("No products below the low-stock threshold.", icon="✅")
+    else:
+        st.dataframe(low[["product_id", "product_name", "category", "stock", "supplier"]],
+                     hide_index=True, width="stretch")
+
+with quality:
+    rejected = load_rejected(str(config.REJECTED_DATA))
     if rejected is None or rejected.empty:
         st.caption("No rejected rows recorded.")
     else:
+        st.subheader("Rejected rows by reason (last run)")
         reasons = rejected["rejection_reason"].value_counts()
         st.bar_chart(reasons, horizontal=True, color=SERIES_COLOR, x_label="Rows", y_label="")
-with c4:
-    st.subheader(f"Low stock (<{LOW_STOCK})")
-    low = view[view["stock"] < LOW_STOCK].sort_values("stock")
-    st.dataframe(low[["product_id", "product_name", "category", "stock", "supplier"]],
-                 hide_index=True, width="stretch")
+        with st.expander(f"Show {len(rejected):,} rejected rows"):
+            st.dataframe(rejected, hide_index=True, width="stretch")
 
 # --- table view ------------------------------------------------------------------------
-st.subheader("Products")
-st.dataframe(
-    view.drop(columns=["created_at", "updated_at"]).sort_values("product_id"),
-    hide_index=True,
-    width="stretch",
-    column_config={"price": st.column_config.NumberColumn(format="$%.2f")},
-)
-st.download_button("Download filtered CSV", view.to_csv(index=False), "products_filtered.csv")
+with catalog:
+    st.dataframe(
+        view.drop(columns=["created_at", "updated_at"]).sort_values("product_id"),
+        hide_index=True,
+        width="stretch",
+        column_config={"price": st.column_config.NumberColumn(format="$%.2f")},
+    )
+    st.download_button("Download filtered CSV", view.to_csv(index=False),
+                       "products_filtered.csv", icon="⬇️")
