@@ -59,3 +59,8 @@ def test_dashboard_with_data(monkeypatch, db_url, engine):
 
     at.multiselect[0].set_value(["Storage"]).run()
     assert {m.label: m.value for m in at.metric}["Products"] == "3"
+
+    at.multiselect[0].set_value(sorted(set(df["category"]))).run()
+    at.text_input[0].set_value("p007").run()  # search is case-insensitive
+    assert not at.exception
+    assert any(c.value == "1 of 12 products" for c in at.caption)

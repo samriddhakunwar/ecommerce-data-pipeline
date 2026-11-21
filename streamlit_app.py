@@ -203,11 +203,24 @@ with quality:
 
 # --- table view ------------------------------------------------------------------------
 with catalog:
+    query = st.text_input("Search products", placeholder="Name, ID or supplier…")
+    table = view
+    if query:
+        hay = view["product_name"] + " " + view["product_id"].astype(str) + " " + view["supplier"]
+        table = view[hay.str.contains(query, case=False, regex=False, na=False)]
+    st.caption(f"{len(table):,} of {len(view):,} products")
     st.dataframe(
-        view.drop(columns=["created_at", "updated_at"]).sort_values("product_id"),
+        table.drop(columns=["created_at", "updated_at"]).sort_values("product_id"),
         hide_index=True,
         width="stretch",
-        column_config={"price": st.column_config.NumberColumn(format="$%.2f")},
+        column_config={
+            "product_id": st.column_config.TextColumn("ID"),
+            "product_name": st.column_config.TextColumn("Product"),
+            "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+            "stock": st.column_config.ProgressColumn(
+                "Stock", format="%d", min_value=0, max_value=int(df["stock"].max()) or 1
+            ),
+        },
     )
-    st.download_button("Download filtered CSV", view.to_csv(index=False),
+    st.download_button("Download CSV", table.to_csv(index=False),
                        "products_filtered.csv", icon="⬇️")
