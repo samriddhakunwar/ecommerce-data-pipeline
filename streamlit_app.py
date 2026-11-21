@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 SERIES_COLOR = "#2a78d6"  # single-series charts: one hue, no legend needed
 LOW_STOCK = 10
 
-st.set_page_config(page_title="E-commerce Pipeline Dashboard", layout="wide")
+st.set_page_config(page_title="E-commerce Pipeline Dashboard", page_icon="📦", layout="wide")
 
 
 @st.cache_data(ttl=60)
@@ -98,7 +98,8 @@ def ensure_data(db_url: str) -> str | None:
     return None
 
 
-st.title("E-commerce Data Pipeline")
+st.title("📦 E-commerce Data Pipeline")
+st.caption("Product catalog, inventory health and data quality from the latest pipeline run.")
 
 DB_URL = get_db_url()
 with st.spinner("Building the dataset (first start only)…"):
@@ -130,16 +131,21 @@ if report:
     if report.get("error"):
         st.caption(f"Error: {report['error']}")
 
-# --- filters (one row, above the charts) -----------------------------------------------
+# --- filters (sidebar) -----------------------------------------------------------------
 all_categories = sorted(df["category"].unique())
 price_min, price_max = float(df["price"].min()), float(df["price"].max())
-f1, f2 = st.columns([2, 1])
-selected = f1.multiselect("Categories", all_categories, default=all_categories)
-if price_min < price_max:
-    price_range = f2.slider("Price range ($)", price_min, price_max, (price_min, price_max))
-else:  # st.slider rejects min == max
-    price_range = (price_min, price_max)
-    f2.caption(f"All products cost ${price_min:,.2f}")
+with st.sidebar:
+    st.header("Filters")
+    selected = st.multiselect("Categories", all_categories, default=all_categories)
+    if price_min < price_max:
+        price_range = st.slider("Price range ($)", price_min, price_max, (price_min, price_max))
+    else:  # st.slider rejects min == max
+        price_range = (price_min, price_max)
+        st.caption(f"All products cost ${price_min:,.2f}")
+    st.divider()
+    if st.button("Refresh data", icon="🔄", width="stretch"):
+        st.cache_data.clear()
+        st.rerun()
 
 view = df[df["category"].isin(selected) & df["price"].between(*price_range)]
 if view.empty:
